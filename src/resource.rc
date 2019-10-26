@@ -12,7 +12,7 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 //
 // Manifest
 //
-1      RT_MANIFEST             "swind2.exe.manifest"
+1      RT_MANIFEST             "gdrv-loader.exe.manifest"
 
 
 #endif    // English (United States) resources
