@@ -515,7 +515,7 @@ TriggerExploit(
 
 	if (NtCurrentPeb()->OSBuildNumber < 18363)
 	{
-		Printf(L"[Build:%d] g_CiProtectedContent mitigation enabled\n", NtCurrentPeb()->OSBuildNumber, *OldCiOptionsValue);
+		Printf(L"[Build:%d] g_CiProtectedContent mitigation enabled\n", NtCurrentPeb()->OSBuildNumber);
 
 		Status = MitigateCiProtectedContent(DeviceHandle, &CiVariableAddress);
 		if (!NT_SUCCESS(Status))
