@@ -513,7 +513,7 @@ TriggerExploit(
 		*OldCiOptionsValue = OldCiOptions;
 	}
 
-	if (NtCurrentPeb()->OSBuildNumber > 18363)
+	if (NtCurrentPeb()->OSBuildNumber < 18363)
 	{
 		Printf(L"[Build:%d] g_CiProtectedContent mitigation enabled\n", NtCurrentPeb()->OSBuildNumber, *OldCiOptionsValue);
 
